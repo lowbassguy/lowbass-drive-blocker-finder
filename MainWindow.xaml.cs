@@ -16,6 +16,8 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -300,6 +302,229 @@ public partial class MainWindow : Window
     //  Kill process
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    //  Per-file: show the window that's holding THIS specific file
+    // -------------------------------------------------------------------------
+
+    private void ShowFileWindow_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn) return;
+        if (btn.Tag is not BlockingFile bf) return;
+
+        try
+        {
+            using var p = Process.GetProcessById(bf.OwnerPid);
+
+            // Enumerate the process's visible top-level windows and pick the best
+            // match for this file. For Explorer in particular this is essential -
+            // MainWindowHandle for explorer.exe is usually NOT a user-visible
+            // Explorer window.
+            IntPtr hwnd = FindBestWindowForFile(bf.OwnerPid, bf.Path);
+
+            // Fall back to MainWindowHandle if nothing scored well
+            if (hwnd == IntPtr.Zero) hwnd = p.MainWindowHandle;
+
+            if (hwnd == IntPtr.Zero)
+            {
+                Logger.Instance.Warn("UI", "ShowWindow", "NO_WINDOW",
+                    $"pid={bf.OwnerPid} name={p.ProcessName} has no visible main window");
+                MessageBox.Show(
+                    $"{p.ProcessName} doesn't have a visible window to show — " +
+                    "it's likely a background service or has no UI.",
+                    "No window", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            BringWindowForward(hwnd);
+
+            Logger.Instance.Success("UI", "ShowWindow", "DONE",
+                $"pid={bf.OwnerPid} name={p.ProcessName} file={System.IO.Path.GetFileName(bf.Path)}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error("UI", "ShowWindow", "FAIL",
+                $"pid={bf.OwnerPid} error={ex.Message}");
+            MessageBox.Show($"Could not show window: {ex.Message}",
+                "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    //  Per-file: close just this kernel handle in the owner process
+    // -------------------------------------------------------------------------
+
+    private void CloseFileHandle_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn) return;
+        if (btn.Tag is not BlockingFile bf) return;
+
+        if (!bf.CanCloseHandle)
+        {
+            // Strategy 1 finds (loaded DLLs/EXEs) don't have a real kernel handle
+            // value - the only way to release a loaded module is to kill the process.
+            MessageBox.Show(
+                "This entry is a loaded module (DLL/EXE), not an open file handle. " +
+                "There's no way to release it without terminating the process - " +
+                "use the Kill button instead.",
+                "Cannot close module", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var confirm = MessageBox.Show(
+            $"Force-close this handle in PID {bf.OwnerPid}?\n\n" +
+            $"File: {bf.Path}\n\n" +
+            "WARNING: closing a handle out from under another process can cause it " +
+            "to crash or behave unpredictably the next time it tries to use that " +
+            "handle. Standard Windows tools (Task Manager, Resource Monitor) don't " +
+            "expose this. Proceed only if you understand the risk.",
+            "Confirm close handle", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.Yes) return;
+
+        // DuplicateHandle with DUPLICATE_CLOSE_SOURCE - copies the handle into our
+        // process AND closes the source. We then close our copy. Net effect: handle
+        // is gone from the source process.
+        IntPtr hSource = NativeMethods.OpenProcess(NativeMethods.PROCESS_DUP_HANDLE, false, (uint)bf.OwnerPid);
+        if (hSource == IntPtr.Zero)
+        {
+            int err = Marshal.GetLastWin32Error();
+            Logger.Instance.Error("UI", "CloseHandle", "FAIL_OPEN",
+                $"pid={bf.OwnerPid} win32err={err}");
+            MessageBox.Show(
+                $"Could not open PID {bf.OwnerPid} (Win32 error {err}). " +
+                "If this is a system service or process owned by another user, " +
+                "you'll need to run this app as Administrator.",
+                "Access denied", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        try
+        {
+            if (NativeMethods.DuplicateHandle(
+                    hSource, bf.Handle,
+                    NativeMethods.GetCurrentProcess(), out IntPtr dup,
+                    0, false, NativeMethods.DUPLICATE_CLOSE_SOURCE))
+            {
+                NativeMethods.CloseHandle(dup);
+                Logger.Instance.Success("UI", "CloseHandle", "DONE",
+                    $"pid={bf.OwnerPid} file={bf.Path}");
+
+                // Update the UI - find this entry and remove it from its parent's list
+                foreach (var proc in _blockers)
+                {
+                    if (proc.Pid == bf.OwnerPid)
+                    {
+                        proc.BlockingFiles.Remove(bf);
+                        // If the process has no remaining files, drop the whole row
+                        if (proc.BlockingFiles.Count == 0)
+                            _blockers.Remove(proc);
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                int err = Marshal.GetLastWin32Error();
+                Logger.Instance.Error("UI", "CloseHandle", "FAIL_DUP",
+                    $"pid={bf.OwnerPid} win32err={err}");
+                MessageBox.Show(
+                    $"DuplicateHandle failed (Win32 error {err}). The handle may " +
+                    "already be closed or be a protected kernel object.",
+                    "Close failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+        finally
+        {
+            NativeMethods.CloseHandle(hSource);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    //  Helpers - smart window finding + robust foreground
+    // -------------------------------------------------------------------------
+
+    // Enumerate the process's top-level visible windows and pick the one whose
+    // title looks most relevant to the given file path. Returns IntPtr.Zero if
+    // nothing scored above zero.
+    private static IntPtr FindBestWindowForFile(int pid, string filePath)
+    {
+        string leaf       = System.IO.Path.GetFileName(filePath);
+        string parentDir  = System.IO.Path.GetDirectoryName(filePath) ?? "";
+        string parentLeaf = System.IO.Path.GetFileName(parentDir);
+        string drive      = filePath.Length >= 2 ? filePath.Substring(0, 2) : "";
+
+        IntPtr best = IntPtr.Zero;
+        int bestScore = 0;
+
+        NativeMethods.EnumWindows((hwnd, _) =>
+        {
+            // Same process?
+            NativeMethods.GetWindowThreadProcessId(hwnd, out uint windowPid);
+            if (windowPid != (uint)pid) return true; // keep enumerating
+
+            // Must be visible to be useful to the user
+            if (!NativeMethods.IsWindowVisible(hwnd)) return true;
+
+            int len = NativeMethods.GetWindowTextLength(hwnd);
+            if (len == 0) return true;
+
+            var sb = new StringBuilder(len + 1);
+            NativeMethods.GetWindowText(hwnd, sb, sb.Capacity);
+            string title = sb.ToString();
+            if (string.IsNullOrWhiteSpace(title)) return true;
+
+            // Score by how specific the match is. Higher is better.
+            int score = 1; // baseline for "visible window with a title"
+            if (title.IndexOf(filePath,  StringComparison.OrdinalIgnoreCase) >= 0) score = 100;
+            else if (!string.IsNullOrEmpty(leaf)       && title.IndexOf(leaf,       StringComparison.OrdinalIgnoreCase) >= 0) score = 80;
+            else if (!string.IsNullOrEmpty(parentLeaf) && title.IndexOf(parentLeaf, StringComparison.OrdinalIgnoreCase) >= 0) score = 50;
+            else if (!string.IsNullOrEmpty(drive)      && title.IndexOf(drive,      StringComparison.OrdinalIgnoreCase) >= 0) score = 20;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = hwnd;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        return best;
+    }
+
+    // SetForegroundWindow alone is blocked by Windows' focus-stealing rules in
+    // many cases (especially for explorer.exe). The reliable workaround is to
+    // briefly attach our input queue to the target window's thread - that gives
+    // us the right to set foreground, BringWindowToTop kicks the window up, and
+    // then we detach. Used by every "focus stealer" in the wild.
+    private static void BringWindowForward(IntPtr hwnd)
+    {
+        if (NativeMethods.IsIconic(hwnd))
+            NativeMethods.ShowWindow(hwnd, NativeMethods.SW_RESTORE);
+        else
+            NativeMethods.ShowWindow(hwnd, NativeMethods.SW_SHOW);
+
+        uint targetThread = NativeMethods.GetWindowThreadProcessId(hwnd, out _);
+        uint ourThread    = NativeMethods.GetCurrentThreadId();
+
+        if (targetThread == 0 || targetThread == ourThread)
+        {
+            NativeMethods.BringWindowToTop(hwnd);
+            NativeMethods.SetForegroundWindow(hwnd);
+            return;
+        }
+
+        bool attached = NativeMethods.AttachThreadInput(ourThread, targetThread, true);
+        try
+        {
+            NativeMethods.BringWindowToTop(hwnd);
+            NativeMethods.SetForegroundWindow(hwnd);
+        }
+        finally
+        {
+            if (attached)
+                NativeMethods.AttachThreadInput(ourThread, targetThread, false);
+        }
+    }
+
     private void KillProcess_Click(object sender, RoutedEventArgs e)
     {
         // The Tag binding gives us the PID without needing the row's DataContext
@@ -411,4 +636,84 @@ public partial class MainWindow : Window
         Logger.Instance.LogEmitted -= OnLogEmitted;
         // App.OnExit will fire next and flush the log file
     }
+}
+
+// =============================================================================
+//  Native methods used only by the UI (window focus / minimize state + per-handle
+//  close). Kept here rather than in a service class because they're UI concerns.
+// =============================================================================
+internal static class NativeMethods
+{
+    public const int SW_SHOW    = 5;   // Show window in current size and position
+    public const int SW_RESTORE = 9;   // Un-minimize / un-maximize back to "normal"
+
+    // For DuplicateHandle - DUPLICATE_CLOSE_SOURCE closes the source handle as a
+    // side effect of the duplicate. That's the documented way to forcibly close
+    // a handle in another process.
+    public const uint PROCESS_DUP_HANDLE    = 0x0040;
+    public const uint DUPLICATE_CLOSE_SOURCE = 0x00000001;
+    public const uint DUPLICATE_SAME_ACCESS  = 0x00000002;
+
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowTextLength(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo,
+        [MarshalAs(UnmanagedType.Bool)] bool fAttach);
+
+    [DllImport("kernel32.dll")]
+    public static extern uint GetCurrentThreadId();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr OpenProcess(uint dwDesiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool DuplicateHandle(IntPtr hSourceProcessHandle, IntPtr hSourceHandle,
+        IntPtr hTargetProcessHandle, out IntPtr lpTargetHandle, uint dwDesiredAccess,
+        [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwOptions);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool CloseHandle(IntPtr hObject);
 }

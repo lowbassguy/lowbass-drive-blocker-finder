@@ -7,6 +7,7 @@
 //           unit-testing the scanner straightforward.
 // =============================================================================
 
+using System;
 using System.Collections.Generic;
 
 namespace LowbassDriveBlockerFinder.Models;
@@ -51,5 +52,30 @@ public class ProcessUsage
     public string Reason { get; set; } = "";
 
     /// <summary>List of files/modules on the target drive that this process holds.</summary>
-    public List<string> BlockingFiles { get; set; } = new();
+    public List<BlockingFile> BlockingFiles { get; set; } = new();
+}
+
+/// <summary>
+/// A single file (or module / DLL) on the target drive being held by a process.
+/// Carries the source-process handle value when the finding came from Strategy 3
+/// (handle enumeration), which is what makes per-handle "Close" possible. For
+/// Strategy 1 findings (loaded modules) the Handle is IntPtr.Zero and the Close
+/// action is disabled in the UI - you can't unload a module from outside.
+/// </summary>
+public class BlockingFile
+{
+    /// <summary>Translated DOS-style path, e.g. "D:\Pictures\foo.jpg".</summary>
+    public string Path { get; set; } = "";
+
+    /// <summary>PID of the process that owns the handle / module.</summary>
+    public int OwnerPid { get; set; }
+
+    /// <summary>Handle value in the OWNER process. IntPtr.Zero for module findings.</summary>
+    public IntPtr Handle { get; set; }
+
+    /// <summary>True when we have a real kernel handle that can be force-closed.</summary>
+    public bool CanCloseHandle => Handle != IntPtr.Zero;
+
+    // Used by WPF tooltip text-binding fallbacks and anywhere a string is expected.
+    public override string ToString() => Path;
 }

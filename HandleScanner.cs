@@ -37,6 +37,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using LowbassDriveBlockerFinder.Models;
 
 namespace LowbassDriveBlockerFinder;
 
@@ -64,10 +65,12 @@ public sealed class HandleScanner
     // =========================================================================
 
     /// <summary>
-    /// Returns a dictionary keyed by PID, with each value being the list of file
-    /// paths (on the target drive) that the process has open handles to.
+    /// Returns a dictionary keyed by PID, with each value being the list of
+    /// BlockingFile entries (path + source handle) that this process has open
+    /// against the target drive. Carries the source-process handle value so the
+    /// UI can offer a per-handle "Close" action.
     /// </summary>
-    public Dictionary<int, List<string>> FindHandlesOnDrive(string driveLetter, CancellationToken ct)
+    public Dictionary<int, List<BlockingFile>> FindHandlesOnDrive(string driveLetter, CancellationToken ct)
     {
         _log.Info("HandleScanner", "FindHandles", "START", $"drive={driveLetter}");
 
@@ -76,13 +79,51 @@ public sealed class HandleScanner
         if (!drivePrefix.EndsWith(":")) drivePrefix += ":";
         drivePrefix += "\\";
 
-        var results = new Dictionary<int, List<string>>();
+        var results = new Dictionary<int, List<BlockingFile>>();
 
-        // Step 1: get all handles in the system
+        // Step 1+2: get all handles in the system, optionally with a probe-file
+        // handle open BEFORE the snapshot (only on first scan, to learn which
+        // ObjectTypeIndex means "File"). On subsequent scans we just snapshot.
         SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX[] handles;
         try
         {
-            handles = QueryAllSystemHandles();
+            if (_fileTypeIndex == null)
+            {
+                // Open the probe FIRST so its handle is included in the snapshot.
+                using var probe = TryOpenTypeProbe();
+                IntPtr probeHandle = probe?.SafeFileHandle?.DangerousGetHandle() ?? IntPtr.Zero;
+
+                handles = QueryAllSystemHandles();
+
+                if (probeHandle != IntPtr.Zero)
+                {
+                    int ourPidForProbe = Environment.ProcessId;
+                    foreach (var h in handles)
+                    {
+                        if ((int)h.UniqueProcessId.ToInt64() == ourPidForProbe &&
+                            h.HandleValue == probeHandle)
+                        {
+                            _fileTypeIndex = h.ObjectTypeIndex;
+                            break;
+                        }
+                    }
+                }
+
+                if (_fileTypeIndex == null)
+                {
+                    _log.Warn("HandleScanner", "TypeIndex", "UNKNOWN",
+                        "could not determine File type index; scanning all handles (slower)");
+                }
+                else
+                {
+                    _log.Debug("HandleScanner", "TypeIndex", "DETERMINED",
+                        $"fileTypeIndex={_fileTypeIndex}");
+                }
+            }
+            else
+            {
+                handles = QueryAllSystemHandles();
+            }
         }
         catch (Exception ex)
         {
@@ -90,22 +131,6 @@ public sealed class HandleScanner
             return results;
         }
         _log.Debug("HandleScanner", "QuerySystem", "GOT", $"handle_count={handles.Length}");
-
-        // Step 2: figure out which ObjectTypeIndex means "File"
-        if (_fileTypeIndex == null)
-        {
-            _fileTypeIndex = DetermineFileTypeIndex(handles);
-            if (_fileTypeIndex == null)
-            {
-                _log.Warn("HandleScanner", "TypeIndex", "UNKNOWN",
-                    "could not determine File type index; scanning all handles (slower)");
-            }
-            else
-            {
-                _log.Debug("HandleScanner", "TypeIndex", "DETERMINED",
-                    $"fileTypeIndex={_fileTypeIndex}");
-            }
-        }
 
         // Step 3: walk handles, grouped by PID so we can amortize the OpenProcess call
         int ourPid = Environment.ProcessId;
@@ -193,13 +218,32 @@ public sealed class HandleScanner
                         handlesMatched++;
                         if (!results.TryGetValue(pid, out var fileList))
                         {
-                            fileList = new List<string>();
+                            fileList = new List<BlockingFile>();
                             results[pid] = fileList;
                         }
                         // Tiny per-process dedup - one process can have the same file
                         // open multiple times (think: tabs of the same file in an editor).
-                        if (!fileList.Contains(dosPath, StringComparer.OrdinalIgnoreCase))
-                            fileList.Add(dosPath);
+                        // Dedup by path so the user sees one row per file, but remember
+                        // we'd lose handle-close granularity for duplicates. Acceptable
+                        // trade for cleaner UI.
+                        bool alreadyTracked = false;
+                        foreach (var existing in fileList)
+                        {
+                            if (string.Equals(existing.Path, dosPath, StringComparison.OrdinalIgnoreCase))
+                            {
+                                alreadyTracked = true;
+                                break;
+                            }
+                        }
+                        if (!alreadyTracked)
+                        {
+                            fileList.Add(new BlockingFile
+                            {
+                                Path     = dosPath,
+                                OwnerPid = pid,
+                                Handle   = srcHandle  // value in the SOURCE process
+                            });
+                        }
                     }
                     finally
                     {
@@ -289,44 +333,30 @@ public sealed class HandleScanner
     }
 
     // =========================================================================
-    //  Step 2 - figure out which ObjectTypeIndex means "File"
+    //  Step 2 - probe file used to learn which ObjectTypeIndex means "File"
     //
     //  ObjectTypeIndex is just a small integer assigned by the kernel at boot.
     //  The number for "File" is stable for the boot session but can change
     //  across boots / Windows versions, so we determine it dynamically by
-    //  finding our own log file's handle in the system list and reading the
-    //  index off it.
+    //  opening a known file, snapshotting the system handle table, and reading
+    //  the type index off our probe's entry.
+    //
+    //  Critical: the caller MUST open the probe BEFORE snapshotting the handle
+    //  table, or the probe's handle won't be in the snapshot.
     // =========================================================================
 
-    private static ushort? DetermineFileTypeIndex(SYSTEM_HANDLE_TABLE_ENTRY_INFO_EX[] handles)
+    private static FileStream? TryOpenTypeProbe()
     {
-        // Open a file in our own process whose handle value we can pin down
         string probePath = Logger.Instance.LogFilePath
             ?? Path.Combine(Path.GetTempPath(), "lowbass-drive-blocker-finder-probe.tmp");
-        FileStream? probe = null;
         try
         {
-            probe = File.Open(probePath, FileMode.OpenOrCreate, FileAccess.Read, FileShare.ReadWrite);
-            IntPtr probeHandle = probe.SafeFileHandle!.DangerousGetHandle();
-            int ourPid = Environment.ProcessId;
-
-            foreach (var h in handles)
-            {
-                if ((int)h.UniqueProcessId.ToInt64() == ourPid &&
-                    h.HandleValue == probeHandle)
-                {
-                    return h.ObjectTypeIndex;
-                }
-            }
-            return null;
+            return File.Open(probePath, FileMode.OpenOrCreate,
+                FileAccess.Read, FileShare.ReadWrite);
         }
         catch
         {
             return null;
-        }
-        finally
-        {
-            probe?.Dispose();
         }
     }
 

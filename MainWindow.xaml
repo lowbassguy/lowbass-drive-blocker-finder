@@ -60,22 +60,69 @@
                   AutoGenerateColumns="False" IsReadOnly="True"
                   GridLinesVisibility="Horizontal" HeadersVisibility="Column"
                   AlternatingRowBackground="#F7F7FA" RowHeight="26"
-                  CanUserResizeRows="False">
+                  CanUserResizeRows="False"
+                  RowDetailsVisibilityMode="VisibleWhenSelected"
+                  SelectionMode="Single" SelectionUnit="FullRow">
             <DataGrid.Columns>
                 <DataGridTextColumn Header="PID"          Binding="{Binding Pid}"          Width="64"  />
                 <DataGridTextColumn Header="Process"      Binding="{Binding ProcessName}"  Width="180" />
                 <DataGridTextColumn Header="Reason"       Binding="{Binding Reason}"       Width="240" />
                 <DataGridTextColumn Header="Main module"  Binding="{Binding MainModule}"   Width="*"   />
-                <DataGridTemplateColumn Header="Action" Width="120">
+                <DataGridTemplateColumn Header="Action" Width="100">
                     <DataGridTemplateColumn.CellTemplate>
                         <DataTemplate>
                             <Button Content="❌ Kill" Padding="6,2"
                                     Click="KillProcess_Click"
-                                    Tag="{Binding Pid}" />
+                                    Tag="{Binding Pid}"
+                                    ToolTip="Force-terminate this process (releases everything it's holding)" />
                         </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                 </DataGridTemplateColumn>
             </DataGrid.Columns>
+
+            <!-- Row details: shown when the row is selected. Lists each file this
+                 process is holding on the drive, with per-file Show + Close buttons.
+                 Show: smart-find the right window (matches title to filename/folder).
+                 Close: force-close JUST that handle in the source process. -->
+            <DataGrid.RowDetailsTemplate>
+                <DataTemplate>
+                    <Border Background="#F0F4FA" BorderBrush="#C8D2E0" BorderThickness="1"
+                            Padding="10,8" Margin="20,4,4,8">
+                        <StackPanel>
+                            <TextBlock Text="Open files on the drive (click row to collapse):"
+                                       FontWeight="Bold" Margin="0,0,0,6" />
+                            <ItemsControl ItemsSource="{Binding BlockingFiles}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,2,0,2">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding Path}"
+                                                       FontFamily="Consolas" FontSize="12"
+                                                       VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Path}" />
+                                            <Button Grid.Column="1" Content="👁 Show" Padding="6,2"
+                                                    Margin="8,0,4,0"
+                                                    Click="ShowFileWindow_Click"
+                                                    Tag="{Binding}"
+                                                    ToolTip="Find the window holding this file and bring it forward" />
+                                            <Button Grid.Column="2" Content="🔓 Close" Padding="6,2"
+                                                    Click="CloseFileHandle_Click"
+                                                    Tag="{Binding}"
+                                                    IsEnabled="{Binding CanCloseHandle}"
+                                                    ToolTip="Force-close just this file handle in the owner process (advanced - may crash the source process)" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </DataGrid.RowDetailsTemplate>
         </DataGrid>
 
         <!-- =================== Log panel =================== -->

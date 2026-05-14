@@ -263,13 +263,26 @@ public class DriveScanner
                     if (blocked)
                     {
                         matched++;
+                        // Wrap each path in a BlockingFile with Handle=Zero so the
+                        // UI knows this came from the module scan (Close-handle
+                        // is meaningless for loaded modules; only Kill releases them).
+                        var fileEntries = new List<BlockingFile>(blockingFiles.Count);
+                        foreach (var path in blockingFiles)
+                        {
+                            fileEntries.Add(new BlockingFile
+                            {
+                                Path     = path,
+                                OwnerPid = p.Id,
+                                Handle   = IntPtr.Zero
+                            });
+                        }
                         results[p.Id] = new ProcessUsage
                         {
                             Pid          = p.Id,
                             ProcessName  = p.ProcessName,
                             MainModule   = mainModulePath,
                             Reason       = reason,
-                            BlockingFiles = blockingFiles.ToList()
+                            BlockingFiles = fileEntries
                         };
                         _log.Debug("DriveScanner", "ScanProcessModules", "MATCH",
                             $"pid={p.Id} name={p.ProcessName} files={blockingFiles.Count}");
@@ -431,7 +444,7 @@ public class DriveScanner
         Dictionary<int, ProcessUsage> results,
         CancellationToken ct)
     {
-        Dictionary<int, List<string>> findings;
+        Dictionary<int, List<BlockingFile>> findings;
         try
         {
             findings = _handleScanner.FindHandlesOnDrive(driveLetter, ct);
@@ -460,10 +473,28 @@ public class DriveScanner
                         ? "Has file handle on drive"
                         : existing.Reason + "; Has file handle on drive";
                 }
-                foreach (var f in files)
+                // Merge in handle-bearing entries. For duplicates by path we keep
+                // the existing entry but upgrade it with the real Handle so the
+                // user can still hit Close on what looked like a module-only find.
+                foreach (var newFile in files)
                 {
-                    if (!existing.BlockingFiles.Contains(f, StringComparer.OrdinalIgnoreCase))
-                        existing.BlockingFiles.Add(f);
+                    BlockingFile? dup = null;
+                    foreach (var have in existing.BlockingFiles)
+                    {
+                        if (string.Equals(have.Path, newFile.Path, StringComparison.OrdinalIgnoreCase))
+                        {
+                            dup = have;
+                            break;
+                        }
+                    }
+                    if (dup == null)
+                    {
+                        existing.BlockingFiles.Add(newFile);
+                    }
+                    else if (dup.Handle == IntPtr.Zero && newFile.Handle != IntPtr.Zero)
+                    {
+                        dup.Handle = newFile.Handle;
+                    }
                 }
             }
             else
