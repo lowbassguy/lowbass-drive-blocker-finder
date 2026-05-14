@@ -63,13 +63,24 @@ public partial class App : Application
         Logger.Instance.Error("App", "DispatcherException", "CAUGHT",
             $"exception={e.Exception.GetType().Name} msg={e.Exception.Message}");
 
+        // If the main window never finished loading, there's no UI to recover
+        // into - "continue" would leave a zombie process behind. Exit cleanly
+        // so the user can retry without having to taskkill us.
+        bool startupFailure = MainWindow == null || !MainWindow.IsLoaded;
+
         MessageBox.Show(
-            $"Something went sideways:\n\n{e.Exception.Message}\n\nThe app will try to continue.",
-            "Unexpected error",
+            startupFailure
+                ? $"Failed to start:\n\n{e.Exception.Message}\n\nThe app will close."
+                : $"Something went sideways:\n\n{e.Exception.Message}\n\nThe app will try to continue.",
+            startupFailure ? "Startup error" : "Unexpected error",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
 
         e.Handled = true;
+        if (startupFailure)
+        {
+            Shutdown(1);
+        }
     }
 
     // ---------------------------------------------------------------------

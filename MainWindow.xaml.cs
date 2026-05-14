@@ -22,6 +22,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using LowbassDriveBlockerFinder.Models;
 
@@ -136,6 +139,58 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     }
 
     private void RefreshButton_Click(object sender, RoutedEventArgs e) => RefreshDrives();
+
+    // -------------------------------------------------------------------------
+    //  Click-to-toggle row details
+    //
+    //  RowDetailsVisibilityMode=VisibleWhenSelected only OPENS the panel - to
+    //  close it the user would have to click a different row. Intercept the
+    //  click: if the row is already selected, deselect it (which collapses the
+    //  details). This gives the natural "click once to expand, click again to
+    //  collapse" gesture. Clicks on buttons inside the row or on the details
+    //  panel itself are ignored so the action buttons still work normally.
+    // -------------------------------------------------------------------------
+
+    private void ProcessGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject src) return;
+
+        // Let buttons (Kill / Show / Close) and clicks inside the details panel
+        // handle themselves normally.
+        if (IsInsideInteractive(src)) return;
+
+        var row = FindAncestor<DataGridRow>(src);
+        if (row == null) return;
+
+        if (row.IsSelected)
+        {
+            ProcessGrid.SelectedItem = null;
+            e.Handled = true;
+        }
+        // If not selected: let the default click handler select the row, which
+        // expands its details via the VisibleWhenSelected mode.
+    }
+
+    private static bool IsInsideInteractive(DependencyObject? node)
+    {
+        while (node != null)
+        {
+            if (node is ButtonBase) return true;
+            if (node is DataGridDetailsPresenter) return true;
+            node = VisualTreeHelper.GetParent(node);
+        }
+        return false;
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
+    {
+        while (node != null)
+        {
+            if (node is T t) return t;
+            node = VisualTreeHelper.GetParent(node);
+        }
+        return null;
+    }
 
     // -------------------------------------------------------------------------
     //  Helpers

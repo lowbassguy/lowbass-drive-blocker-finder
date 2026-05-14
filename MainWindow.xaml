@@ -71,8 +71,13 @@
                            Appearance="Caution"
                            Click="EjectButton_Click"
                            ToolTip="Lock, dismount, and eject the selected drive">
+                    <!-- WPF-UI's SymbolRegular enum has no Eject icon, so we use
+                         FontIcon with the Unicode EJECT SYMBOL (U+23CF). Button.Icon
+                         requires a Wpf.Ui IconElement, so a plain TextBlock doesn't
+                         work there - FontIcon is the right escape hatch. -->
                     <ui:Button.Icon>
-                        <ui:SymbolIcon Symbol="Eject24" />
+                        <ui:FontIcon Glyph="&#x23CF;"
+                                     FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" />
                     </ui:Button.Icon>
                 </ui:Button>
 
@@ -110,7 +115,8 @@
                       CanUserResizeRows="False"
                       RowDetailsVisibilityMode="VisibleWhenSelected"
                       SelectionMode="Single" SelectionUnit="FullRow"
-                      Background="Transparent" BorderThickness="0">
+                      Background="Transparent" BorderThickness="0"
+                      PreviewMouseLeftButtonDown="ProcessGrid_PreviewMouseLeftButtonDown">
                 <DataGrid.Columns>
                     <DataGridTextColumn Header="PID"          Binding="{Binding Pid}"          Width="70"  />
                     <DataGridTextColumn Header="Process"      Binding="{Binding ProcessName}"  Width="200" />
