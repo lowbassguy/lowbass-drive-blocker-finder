@@ -27,7 +27,7 @@ using LowbassDriveBlockerFinder.Models;
 
 namespace LowbassDriveBlockerFinder;
 
-public partial class MainWindow : Window
+public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
     // Service objects. Cheap to construct, no shared mutable state, no need for DI.
     private readonly DriveScanner _scanner = new();

@@ -2,149 +2,239 @@
     Title:   lowbass' Drive Blocker Finder - Main Window XAML
     Author:  Joshua "lowbass" Sommerfeldt
     Date:    2026-05-14
-    Purpose: Single-window UI. Layout (top to bottom):
-               * Action bar - drive picker, Refresh / Scan / Eject, toggles
-               * Blockers grid - PID, name, reason, main module, Kill button
-               * Log panel - live tail of structured log lines
--->
-<Window x:Class="LowbassDriveBlockerFinder.MainWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="lowbass' Drive Blocker Finder"
-        Height="720" Width="1080"
-        WindowStartupLocation="CenterScreen"
-        FontFamily="Segoe UI" FontSize="13">
+    Purpose: Single-window UI styled as a Win11-native Fluent Design app via
+             the WPF-UI library. Root is ui:FluentWindow with the Mica backdrop
+             and a dark-theme palette inherited from App.xaml.
 
-    <Grid Margin="12">
+             Layout (top to bottom):
+               * ui:TitleBar - custom title bar with minimize/maximize/close
+               * Action toolbar - drive picker, Refresh / Scan / Eject, toggles
+               * Status text
+               * Blockers grid - PID, name, reason, main module, Kill button
+                   - row details (expand on row select): per-file Show + Close
+               * Log panel - live tail of structured log lines (Consolas, dark)
+-->
+<ui:FluentWindow x:Class="LowbassDriveBlockerFinder.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="lowbass' Drive Blocker Finder"
+                 Height="760" Width="1120"
+                 WindowBackdropType="Mica"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowStartupLocation="CenterScreen"
+                 WindowCornerPreference="Round"
+                 FontFamily="Segoe UI Variable, Segoe UI" FontSize="13">
+
+    <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />  <!-- Action bar -->
-            <RowDefinition Height="Auto" />  <!-- Status line -->
+            <RowDefinition Height="Auto" />  <!-- TitleBar -->
+            <RowDefinition Height="Auto" />  <!-- Toolbar -->
+            <RowDefinition Height="Auto" />  <!-- Status -->
             <RowDefinition Height="*"    />  <!-- Blockers grid -->
-            <RowDefinition Height="220"  />  <!-- Log panel -->
+            <RowDefinition Height="260"  />  <!-- Log panel -->
         </Grid.RowDefinitions>
 
-        <!-- =================== Action bar =================== -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-            <TextBlock Text="Drive:" VerticalAlignment="Center" Margin="0,0,6,0" />
-            <ComboBox x:Name="DriveCombo" Width="420" />
-            <Button x:Name="RefreshButton" Content="🔄 Refresh"
-                    Margin="8,0,0,0" Padding="10,5"
-                    Click="RefreshButton_Click"
-                    ToolTip="Re-enumerate drives" />
-            <Button x:Name="ScanButton" Content="🔍 Scan blockers"
-                    Margin="8,0,0,0" Padding="10,5"
-                    Click="ScanButton_Click"
-                    ToolTip="Find processes that appear to be using the selected drive" />
-            <Button x:Name="EjectButton" Content="⏏ Eject"
-                    Margin="8,0,0,0" Padding="10,5"
-                    Click="EjectButton_Click"
-                    ToolTip="Lock, dismount, and eject the selected drive" />
-            <Separator Margin="12,4" />
-            <CheckBox x:Name="VerboseCheck" Content="Verbose"
-                      IsChecked="True" VerticalAlignment="Center" Margin="6,0,0,0"
-                      Checked="Verbose_Toggle" Unchecked="Verbose_Toggle"
-                      ToolTip="Include DEBUG lines in the log" />
-            <CheckBox x:Name="EmojiCheck" Content="Emojis"
-                      IsChecked="True" VerticalAlignment="Center" Margin="10,0,0,0"
-                      Checked="Emoji_Toggle" Unchecked="Emoji_Toggle"
-                      ToolTip="Prefix log lines with an emoji per level" />
-        </StackPanel>
+        <!-- =================== Custom title bar =================== -->
+        <ui:TitleBar Grid.Row="0" Title="lowbass' Drive Blocker Finder">
+            <ui:TitleBar.Icon>
+                <ui:SymbolIcon Symbol="Eye24" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <!-- =================== Action toolbar =================== -->
+        <Border Grid.Row="1" Padding="20,12,20,12">
+            <StackPanel Orientation="Horizontal">
+                <ui:TextBlock Text="Drive" Appearance="Secondary"
+                              VerticalAlignment="Center" Margin="0,0,10,0" />
+                <ComboBox x:Name="DriveCombo" Width="420" />
+
+                <ui:Button x:Name="RefreshButton" Margin="12,0,0,0"
+                           Appearance="Secondary"
+                           Click="RefreshButton_Click"
+                           ToolTip="Re-enumerate drives">
+                    <ui:Button.Icon>
+                        <ui:SymbolIcon Symbol="ArrowClockwise24" />
+                    </ui:Button.Icon>
+                </ui:Button>
+
+                <ui:Button x:Name="ScanButton" Content="Scan" Margin="8,0,0,0"
+                           Appearance="Primary"
+                           Click="ScanButton_Click"
+                           ToolTip="Find processes that appear to be using the selected drive">
+                    <ui:Button.Icon>
+                        <ui:SymbolIcon Symbol="Search24" />
+                    </ui:Button.Icon>
+                </ui:Button>
+
+                <ui:Button x:Name="EjectButton" Content="Eject" Margin="8,0,0,0"
+                           Appearance="Caution"
+                           Click="EjectButton_Click"
+                           ToolTip="Lock, dismount, and eject the selected drive">
+                    <ui:Button.Icon>
+                        <ui:SymbolIcon Symbol="Eject24" />
+                    </ui:Button.Icon>
+                </ui:Button>
+
+                <Border Width="1" Margin="16,4,16,4"
+                        Background="{DynamicResource ControlStrokeColorDefaultBrush}" />
+
+                <ui:ToggleSwitch x:Name="VerboseCheck" Content="Verbose"
+                                 IsChecked="True" VerticalAlignment="Center"
+                                 Margin="0,0,16,0"
+                                 Checked="Verbose_Toggle" Unchecked="Verbose_Toggle"
+                                 ToolTip="Include DEBUG lines in the log" />
+                <ui:ToggleSwitch x:Name="EmojiCheck" Content="Emojis"
+                                 IsChecked="True" VerticalAlignment="Center"
+                                 Checked="Emoji_Toggle" Unchecked="Emoji_Toggle"
+                                 ToolTip="Prefix log lines with an emoji per level" />
+            </StackPanel>
+        </Border>
 
         <!-- =================== Status line =================== -->
-        <TextBlock Grid.Row="1" x:Name="StatusText"
-                   Text="Ready. Pick a drive and hit Scan."
-                   Margin="0,0,0,8" Foreground="#555" FontStyle="Italic" />
+        <ui:TextBlock Grid.Row="2" x:Name="StatusText"
+                      Text="Ready. Pick a drive and hit Scan."
+                      Appearance="Tertiary"
+                      Margin="20,0,20,8" />
 
         <!-- =================== Blockers grid =================== -->
-        <DataGrid Grid.Row="2" x:Name="ProcessGrid"
-                  AutoGenerateColumns="False" IsReadOnly="True"
-                  GridLinesVisibility="Horizontal" HeadersVisibility="Column"
-                  AlternatingRowBackground="#F7F7FA" RowHeight="26"
-                  CanUserResizeRows="False"
-                  RowDetailsVisibilityMode="VisibleWhenSelected"
-                  SelectionMode="Single" SelectionUnit="FullRow">
-            <DataGrid.Columns>
-                <DataGridTextColumn Header="PID"          Binding="{Binding Pid}"          Width="64"  />
-                <DataGridTextColumn Header="Process"      Binding="{Binding ProcessName}"  Width="180" />
-                <DataGridTextColumn Header="Reason"       Binding="{Binding Reason}"       Width="240" />
-                <DataGridTextColumn Header="Main module"  Binding="{Binding MainModule}"   Width="*"   />
-                <DataGridTemplateColumn Header="Action" Width="100">
-                    <DataGridTemplateColumn.CellTemplate>
-                        <DataTemplate>
-                            <Button Content="❌ Kill" Padding="6,2"
-                                    Click="KillProcess_Click"
-                                    Tag="{Binding Pid}"
-                                    ToolTip="Force-terminate this process (releases everything it's holding)" />
-                        </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                </DataGridTemplateColumn>
-            </DataGrid.Columns>
+        <Border Grid.Row="3" Margin="20,0,20,10"
+                Background="{DynamicResource ControlFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="8">
+            <DataGrid x:Name="ProcessGrid"
+                      AutoGenerateColumns="False" IsReadOnly="True"
+                      HeadersVisibility="Column"
+                      GridLinesVisibility="None"
+                      RowHeight="32"
+                      CanUserResizeRows="False"
+                      RowDetailsVisibilityMode="VisibleWhenSelected"
+                      SelectionMode="Single" SelectionUnit="FullRow"
+                      Background="Transparent" BorderThickness="0">
+                <DataGrid.Columns>
+                    <DataGridTextColumn Header="PID"          Binding="{Binding Pid}"          Width="70"  />
+                    <DataGridTextColumn Header="Process"      Binding="{Binding ProcessName}"  Width="200" />
+                    <DataGridTextColumn Header="Reason"       Binding="{Binding Reason}"       Width="260" />
+                    <DataGridTextColumn Header="Main module"  Binding="{Binding MainModule}"   Width="*"   />
+                    <DataGridTemplateColumn Header="Action" Width="110">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <ui:Button Content="Kill" Padding="10,3"
+                                           Appearance="Danger"
+                                           Click="KillProcess_Click"
+                                           Tag="{Binding Pid}"
+                                           ToolTip="Force-terminate this process (releases everything it's holding)">
+                                    <ui:Button.Icon>
+                                        <ui:SymbolIcon Symbol="Dismiss24" />
+                                    </ui:Button.Icon>
+                                </ui:Button>
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                </DataGrid.Columns>
 
-            <!-- Row details: shown when the row is selected. Lists each file this
-                 process is holding on the drive, with per-file Show + Close buttons.
-                 Show: smart-find the right window (matches title to filename/folder).
-                 Close: force-close JUST that handle in the source process. -->
-            <DataGrid.RowDetailsTemplate>
-                <DataTemplate>
-                    <Border Background="#F0F4FA" BorderBrush="#C8D2E0" BorderThickness="1"
-                            Padding="10,8" Margin="20,4,4,8">
-                        <StackPanel>
-                            <TextBlock Text="Open files on the drive (click row to collapse):"
-                                       FontWeight="Bold" Margin="0,0,0,6" />
-                            <ItemsControl ItemsSource="{Binding BlockingFiles}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid Margin="0,2,0,2">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Grid.Column="0" Text="{Binding Path}"
-                                                       FontFamily="Consolas" FontSize="12"
-                                                       VerticalAlignment="Center"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       ToolTip="{Binding Path}" />
-                                            <Button Grid.Column="1" Content="👁 Show" Padding="6,2"
-                                                    Margin="8,0,4,0"
-                                                    Click="ShowFileWindow_Click"
-                                                    Tag="{Binding}"
-                                                    ToolTip="Find the window holding this file and bring it forward" />
-                                            <Button Grid.Column="2" Content="🔓 Close" Padding="6,2"
-                                                    Click="CloseFileHandle_Click"
-                                                    Tag="{Binding}"
-                                                    IsEnabled="{Binding CanCloseHandle}"
-                                                    ToolTip="Force-close just this file handle in the owner process (advanced - may crash the source process)" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                    </Border>
-                </DataTemplate>
-            </DataGrid.RowDetailsTemplate>
-        </DataGrid>
+                <!-- Row details: shown when the row is selected. Lists each file
+                     this process is holding on the drive, with per-file Show +
+                     Close buttons. Show: smart-find the right window (matches
+                     title to filename/folder). Close: force-close JUST that
+                     handle in the source process. -->
+                <DataGrid.RowDetailsTemplate>
+                    <DataTemplate>
+                        <Border Background="{DynamicResource SubtleFillColorSecondaryBrush}"
+                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                BorderThickness="1" CornerRadius="6"
+                                Padding="14,10" Margin="24,4,16,10">
+                            <StackPanel>
+                                <ui:TextBlock Text="Open files on the drive (click row to collapse)"
+                                              Appearance="Secondary"
+                                              FontWeight="SemiBold" Margin="0,0,0,8" />
+                                <ItemsControl ItemsSource="{Binding BlockingFiles}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,3,0,3">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" Text="{Binding Path}"
+                                                           FontFamily="Cascadia Code, Consolas"
+                                                           FontSize="12"
+                                                           VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Path}" />
+                                                <ui:Button Grid.Column="1" Content="Show" Padding="10,3"
+                                                           Margin="12,0,6,0"
+                                                           Appearance="Secondary"
+                                                           Click="ShowFileWindow_Click"
+                                                           Tag="{Binding}"
+                                                           ToolTip="Find the window holding this file and bring it forward">
+                                                    <ui:Button.Icon>
+                                                        <ui:SymbolIcon Symbol="Eye24" />
+                                                    </ui:Button.Icon>
+                                                </ui:Button>
+                                                <ui:Button Grid.Column="2" Content="Close" Padding="10,3"
+                                                           Appearance="Caution"
+                                                           Click="CloseFileHandle_Click"
+                                                           Tag="{Binding}"
+                                                           IsEnabled="{Binding CanCloseHandle}"
+                                                           ToolTip="Force-close just this file handle in the owner process (advanced - may crash the source process)">
+                                                    <ui:Button.Icon>
+                                                        <ui:SymbolIcon Symbol="LockOpen24" />
+                                                    </ui:Button.Icon>
+                                                </ui:Button>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </DataGrid.RowDetailsTemplate>
+            </DataGrid>
+        </Border>
 
         <!-- =================== Log panel =================== -->
-        <Grid Grid.Row="3" Margin="0,8,0,0">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*"    />
-            </Grid.RowDefinitions>
-            <DockPanel Grid.Row="0">
-                <TextBlock Text="📋 Log" FontWeight="Bold" />
-                <Button DockPanel.Dock="Right" Content="Open log file"
-                        Padding="6,2" Click="OpenLogFile_Click"
-                        HorizontalAlignment="Right" />
-                <Button DockPanel.Dock="Right" Content="Clear" Margin="0,0,8,0"
-                        Padding="6,2" Click="ClearLog_Click"
-                        HorizontalAlignment="Right" />
-            </DockPanel>
-            <TextBox Grid.Row="1" x:Name="LogBox"
-                     IsReadOnly="True" VerticalScrollBarVisibility="Auto"
-                     FontFamily="Consolas" FontSize="11"
-                     TextWrapping="NoWrap" Background="#111" Foreground="#DDD"
-                     Margin="0,4,0,0" />
-        </Grid>
+        <Border Grid.Row="4" Margin="20,0,20,20"
+                Background="{DynamicResource ControlFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="8" Padding="12">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*"    />
+                </Grid.RowDefinitions>
+                <DockPanel Grid.Row="0" Margin="0,0,0,8">
+                    <ui:TextBlock Text="Log" FontWeight="SemiBold" />
+                    <ui:Button DockPanel.Dock="Right" Content="Open log file"
+                               Appearance="Secondary"
+                               Padding="10,3" Click="OpenLogFile_Click"
+                               HorizontalAlignment="Right">
+                        <ui:Button.Icon>
+                            <ui:SymbolIcon Symbol="DocumentSearch24" />
+                        </ui:Button.Icon>
+                    </ui:Button>
+                    <ui:Button DockPanel.Dock="Right" Content="Clear" Margin="0,0,8,0"
+                               Appearance="Secondary"
+                               Padding="10,3" Click="ClearLog_Click"
+                               HorizontalAlignment="Right">
+                        <ui:Button.Icon>
+                            <ui:SymbolIcon Symbol="Delete24" />
+                        </ui:Button.Icon>
+                    </ui:Button>
+                </DockPanel>
+                <Border Grid.Row="1"
+                        Background="#0E0E12"
+                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                        BorderThickness="1" CornerRadius="6">
+                    <TextBox x:Name="LogBox"
+                             IsReadOnly="True" VerticalScrollBarVisibility="Auto"
+                             FontFamily="Cascadia Code, Consolas" FontSize="11"
+                             TextWrapping="NoWrap"
+                             Background="Transparent" Foreground="#E8E8EE"
+                             BorderThickness="0" Padding="8" />
+                </Border>
+            </Grid>
+        </Border>
     </Grid>
-</Window>
+</ui:FluentWindow>
