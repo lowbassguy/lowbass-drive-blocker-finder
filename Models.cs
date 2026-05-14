@@ -1,5 +1,5 @@
 // =============================================================================
-//  Title:   Drive Blocker Finder - Data Models
+//  Title:   lowbass' Drive Blocker Finder - Data Models
 //  Author:  Joshua "lowbass" Sommerfeldt
 //  Date:    2026-05-14
 //  Purpose: Plain data classes for the things shown in the UI. Keeping them
@@ -9,7 +9,7 @@
 
 using System.Collections.Generic;
 
-namespace DriveBlockerFinder.Models;
+namespace LowbassDriveBlockerFinder.Models;
 
 /// <summary>
 /// One entry in the drive list at the top of the window.

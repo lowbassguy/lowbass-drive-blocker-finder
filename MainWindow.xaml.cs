@@ -1,5 +1,5 @@
 // =============================================================================
-//  Title:   Drive Blocker Finder - Main Window Code-Behind
+//  Title:   lowbass' Drive Blocker Finder - Main Window Code-Behind
 //  Author:  Joshua "lowbass" Sommerfeldt
 //  Date:    2026-05-14
 //  Purpose: Wires up the UI. Runs scans on a background task so the UI stays
@@ -18,9 +18,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using DriveBlockerFinder.Models;
+using LowbassDriveBlockerFinder.Models;
 
-namespace DriveBlockerFinder;
+namespace LowbassDriveBlockerFinder;
 
 public partial class MainWindow : Window
 {
@@ -300,7 +300,7 @@ public partial class MainWindow : Window
         Logger.Instance.LogEmitted -= OnLogEmitted;
 
         Logger.Instance.Success("UI", "Shutdown", "BYE",
-            "👋 thanks for using Drive Blocker Finder!");
+            "👋 thanks for using lowbass' Drive Blocker Finder!");
         // App.OnExit will fire next and flush the log file
     }
 }

@@ -1,5 +1,5 @@
 // =============================================================================
-//  Title:   Drive Blocker Finder - EjectService
+//  Title:   lowbass' Drive Blocker Finder - EjectService
 //  Author:  Joshua "lowbass" Sommerfeldt
 //  Date:    2026-05-14
 //  Purpose: Actually ejects (or at least dismounts) a drive once blockers are
@@ -17,7 +17,7 @@ using System;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
-namespace DriveBlockerFinder;
+namespace LowbassDriveBlockerFinder;
 
 public class EjectService
 {

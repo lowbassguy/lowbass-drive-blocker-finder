@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    Title:   Drive Blocker Finder - Application Manifest
+    Title:   lowbass' Drive Blocker Finder - Application Manifest
     Author:  Joshua "lowbass" Sommerfeldt
     Date:    2026-05-14
     Purpose: Declares UAC level. We use 'asInvoker' so the app doesn't pop a UAC
@@ -8,7 +8,7 @@
              processes, they can right-click -> "Run as administrator" manually.
 -->
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-  <assemblyIdentity version="1.0.0.0" name="DriveBlockerFinder.app" />
+  <assemblyIdentity version="1.0.0.0" name="LowbassDriveBlockerFinder.app" />
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v2">

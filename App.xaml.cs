@@ -1,5 +1,5 @@
 // =============================================================================
-//  Title:   Drive Blocker Finder - App Code-Behind
+//  Title:   lowbass' Drive Blocker Finder - App Code-Behind
 //  Author:  Joshua "lowbass" Sommerfeldt
 //  Date:    2026-05-14
 //  Purpose: Top-level WPF Application class. Hooks global exception handlers and
@@ -12,7 +12,7 @@ using System;
 using System.Windows;
 using System.Windows.Threading;
 
-namespace DriveBlockerFinder;
+namespace LowbassDriveBlockerFinder;
 
 public partial class App : Application
 {

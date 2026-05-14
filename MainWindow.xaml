@@ -1,5 +1,5 @@
 <!--
-    Title:   Drive Blocker Finder - Main Window XAML
+    Title:   lowbass' Drive Blocker Finder - Main Window XAML
     Author:  Joshua "lowbass" Sommerfeldt
     Date:    2026-05-14
     Purpose: Single-window UI. Layout (top to bottom):
@@ -7,10 +7,10 @@
                * Blockers grid - PID, name, reason, main module, Kill button
                * Log panel - live tail of structured log lines
 -->
-<Window x:Class="DriveBlockerFinder.MainWindow"
+<Window x:Class="LowbassDriveBlockerFinder.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Drive Blocker Finder — by lowbass"
+        Title="lowbass' Drive Blocker Finder"
         Height="720" Width="1080"
         WindowStartupLocation="CenterScreen"
         FontFamily="Segoe UI" FontSize="13">

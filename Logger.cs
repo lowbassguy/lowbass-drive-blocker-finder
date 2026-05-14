@@ -1,12 +1,12 @@
 // =============================================================================
-//  Title:   Drive Blocker Finder - Logger
+//  Title:   lowbass' Drive Blocker Finder - Logger
 //  Author:  Joshua "lowbass" Sommerfeldt
 //  Date:    2026-05-14
 //  Purpose: Thread-safe structured logger. Emits every line in the format:
 //
 //             [yyyy-MM-dd HH:mm:ss.fff] {emoji?} [LEVEL] [Component] [Action] [Outcome] details
 //
-//           - Writes to a rolling-per-launch file in %TEMP%\DriveBlockerFinder\
+//           - Writes to a rolling-per-launch file in %TEMP%\LowbassDriveBlockerFinder\
 //           - Raises a LogEmitted event so the UI can display lines live
 //           - Emojis are OPTIONAL (toggleable) and placed BEFORE the structured
 //             segment so log parsers can strip them without breaking columns.
@@ -16,7 +16,7 @@
 using System;
 using System.IO;
 
-namespace DriveBlockerFinder;
+namespace LowbassDriveBlockerFinder;
 
 public sealed class Logger : IDisposable
 {
@@ -45,14 +45,14 @@ public sealed class Logger : IDisposable
 
     // -----------------------------------------------------------------------
     // Private constructor - use Logger.Instance. Tries to open a per-run log
-    // file under %TEMP%\DriveBlockerFinder\. If that fails we still work, just
+    // file under %TEMP%\LowbassDriveBlockerFinder\. If that fails we still work, just
     // without a file sink.
     // -----------------------------------------------------------------------
     private Logger()
     {
         try
         {
-            var dir = Path.Combine(Path.GetTempPath(), "DriveBlockerFinder");
+            var dir = Path.Combine(Path.GetTempPath(), "LowbassDriveBlockerFinder");
             Directory.CreateDirectory(dir);
             LogFilePath = Path.Combine(dir, $"log-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
             _fileWriter = new StreamWriter(LogFilePath, append: true) { AutoFlush = true };

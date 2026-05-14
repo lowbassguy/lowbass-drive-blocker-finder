@@ -1,5 +1,5 @@
 <!--
-    Title:   Drive Blocker Finder - Project File
+    Title:   lowbass' Drive Blocker Finder - Project File
     Author:  Joshua "lowbass" Sommerfeldt
     Date:    2026-05-14
     Purpose: MSBuild project definition. Targets net8.0-windows so we can use WPF
@@ -16,14 +16,14 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>DriveBlockerFinder</RootNamespace>
-    <AssemblyName>DriveBlockerFinder</AssemblyName>
+    <RootNamespace>LowbassDriveBlockerFinder</RootNamespace>
+    <AssemblyName>LowbassDriveBlockerFinder</AssemblyName>
     <!-- The manifest controls UAC behavior; we ship as asInvoker -->
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- Generates a nice Windows version stamp on the .exe -->
     <Version>1.0.0</Version>
     <Company>lowbass</Company>
-    <Product>Drive Blocker Finder</Product>
+    <Product>lowbass' Drive Blocker Finder</Product>
   </PropertyGroup>
 
 </Project>

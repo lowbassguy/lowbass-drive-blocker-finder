@@ -1,5 +1,5 @@
 // =============================================================================
-//  Title:   Drive Blocker Finder - DriveScanner
+//  Title:   lowbass' Drive Blocker Finder - DriveScanner
 //  Author:  Joshua "lowbass" Sommerfeldt
 //  Date:    2026-05-14
 //  Purpose: The brains of the operation. Two responsibilities:
@@ -30,9 +30,9 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
-using DriveBlockerFinder.Models;
+using LowbassDriveBlockerFinder.Models;
 
-namespace DriveBlockerFinder;
+namespace LowbassDriveBlockerFinder;
 
 public class DriveScanner
 {
