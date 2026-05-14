@@ -15,3 +15,7 @@ obj/
 
 # Logs (the app writes to %TEMP%, but cover local cases too)
 *.log
+
+#Development Files
+
+/Dev Files/
