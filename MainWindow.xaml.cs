@@ -220,18 +220,15 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         SetActionsEnabled(false);
         StatusText.Text = $"Scanning {driveLetter}...";
 
-        // Cancel any prior in-flight scan
-        _cts?.Cancel();
-        _cts = new CancellationTokenSource();
-        var token = _cts.Token;
-
         try
         {
-            // Run the scan off the UI thread - it touches every process and
-            // can take a few seconds on busy systems
-            var results = await Task.Run(
-                () => _scanner.FindBlockingProcesses(driveLetter, token),
-                token);
+            var results = await ExecuteScanAsync(driveLetter);
+
+            if (results == null)
+            {
+                StatusText.Text = "Scan cancelled or failed (see log).";
+                return;
+            }
 
             foreach (var r in results) _blockers.Add(r);
 
@@ -246,20 +243,111 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                 StatusText.Text = $"⚠ Found {results.Count} process(es) holding {driveLetter}.";
             }
         }
-        catch (OperationCanceledException)
-        {
-            Logger.Instance.Warn("UI", "Scan", "CANCELLED", $"drive={driveLetter}");
-            StatusText.Text = "Scan cancelled.";
-        }
-        catch (Exception ex)
-        {
-            Logger.Instance.Error("UI", "Scan", "FAIL", ex.Message);
-            StatusText.Text = $"Scan failed: {ex.Message}";
-        }
         finally
         {
             SetActionsEnabled(true);
         }
+    }
+
+    // Shared scan plumbing. Returns the list of blockers (possibly empty), or null
+    // if the scan was cancelled or threw. Manages cancellation tokens but does NOT
+    // touch _blockers or the status text - those are the caller's concern, because
+    // the Scan button and the post-Eject auto-scan want different status messaging.
+    private async Task<List<ProcessUsage>?> ExecuteScanAsync(string driveLetter)
+    {
+        _cts?.Cancel();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
+
+        try
+        {
+            return await Task.Run(
+                () => _scanner.FindBlockingProcesses(driveLetter, token),
+                token);
+        }
+        catch (OperationCanceledException)
+        {
+            Logger.Instance.Warn("UI", "Scan", "CANCELLED", $"drive={driveLetter}");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Logger.Instance.Error("UI", "Scan", "FAIL", ex.Message);
+            return null;
+        }
+    }
+
+    // When the lock step of an eject fails, the drive is still in use. Re-run the
+    // scan immediately so the grid shows what's blocking, and surface the list of
+    // offending processes inside the warning dialog itself so the user doesn't
+    // have to click Scan + read the grid as a separate step.
+    private async Task HandleStillInUseAsync(string driveLetter)
+    {
+        StatusText.Text = $"⚠ {driveLetter} is still in use - scanning to find what's holding it...";
+
+        var blockers = await ExecuteScanAsync(driveLetter);
+
+        if (blockers == null)
+        {
+            // Scan failed or was cancelled - fall back to the old prompt
+            StatusText.Text = $"⚠ {driveLetter} is still in use.";
+            MessageBox.Show(
+                "Could not lock the volume — something is still holding it.\n\n" +
+                "The follow-up scan was cancelled or failed; try Scan manually.",
+                "Still in use", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // Refresh the grid with the up-to-date blocker list
+        _blockers.Clear();
+        foreach (var b in blockers) _blockers.Add(b);
+
+        StatusText.Text = blockers.Count == 0
+            ? $"⚠ {driveLetter} is still in use, but no blockers were detected. Try again."
+            : $"⚠ {blockers.Count} process(es) holding {driveLetter}.";
+
+        MessageBox.Show(
+            FormatBlockerSummary(blockers, driveLetter),
+            "Still in use", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    // Build the body of the "Still in use" dialog. Lists each blocking process
+    // with its PID and file count, capped so the dialog stays readable.
+    private static string FormatBlockerSummary(List<ProcessUsage> blockers, string drive)
+    {
+        if (blockers.Count == 0)
+        {
+            return $"Could not lock {drive}, but the follow-up scan found no specific " +
+                   "blockers. This is unusual - the holder may have released just now, " +
+                   "or it's something neither the module scan nor the handle scan can see.\n\n" +
+                   "Try eject again - it may succeed.";
+        }
+
+        var sb = new StringBuilder();
+        sb.Append($"Could not eject {drive} - ");
+        sb.Append(blockers.Count == 1
+            ? "1 process is holding it:\n\n"
+            : $"{blockers.Count} processes are holding it:\n\n");
+
+        const int maxToShow = 10;
+        int shown = 0;
+        foreach (var b in blockers)
+        {
+            if (shown >= maxToShow)
+            {
+                sb.AppendLine($"  ... and {blockers.Count - shown} more (see the grid for the full list).");
+                break;
+            }
+            int fileCount = b.BlockingFiles.Count;
+            string fileNoun = fileCount == 1 ? "file" : "files";
+            sb.AppendLine($"  • {b.ProcessName}  (PID {b.Pid})  -  {fileCount} {fileNoun}");
+            shown++;
+        }
+
+        sb.AppendLine();
+        sb.Append("Expand a row in the grid to see file paths and per-file Show / Close buttons. ");
+        sb.Append("Use Kill on a row to force-terminate that process, then try Eject again.");
+        return sb.ToString();
     }
 
     private void SetActionsEnabled(bool enabled)
@@ -310,11 +398,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
                 break;
 
             case EjectResult.StillInUse:
-                StatusText.Text = $"⚠ {driveLetter} is still in use.";
-                MessageBox.Show(
-                    "Could not lock the volume — something is still holding it.\n\n" +
-                    "Click Scan to see which processes have it open.",
-                    "Still in use", MessageBoxButton.OK, MessageBoxImage.Warning);
+                await HandleStillInUseAsync(driveLetter);
                 break;
 
             case EjectResult.NotEjectable:
