@@ -156,6 +156,10 @@ public class DriveScanner
         // Strategy 1: walk every process, check its main module + loaded modules
         ScanProcessModules(drivePrefix, results, ct);
 
+        // Honor cancellation between strategies so we don't open an RM session
+        // just to throw out the result.
+        ct.ThrowIfCancellationRequested();
+
         // Strategy 2: ask Restart Manager. Best-effort - works well for some
         // resource types and not others when given a volume root.
         ScanWithRestartManager(driveLetter, results, ct);
@@ -188,83 +192,98 @@ public class DriveScanner
         }
 
         int inspected = 0, matched = 0, denied = 0;
+        int i = 0;  // tracked outside the loop so the outer finally can dispose the rest on cancellation
 
-        foreach (var p in processes)
+        try
         {
-            ct.ThrowIfCancellationRequested();
-
-            try
+            for (; i < processes.Length; i++)
             {
-                bool blocked = false;
-                string reason = "";
-                var blockingFiles = new List<string>();
-                string mainModulePath = "";
+                var p = processes[i];
+                ct.ThrowIfCancellationRequested();
 
-                // (a) Main module / .exe path. Frequently denied for protected processes.
                 try
                 {
-                    mainModulePath = p.MainModule?.FileName ?? "";
-                    if (!string.IsNullOrEmpty(mainModulePath) &&
-                        mainModulePath.StartsWith(drivePrefix, StringComparison.OrdinalIgnoreCase))
-                    {
-                        blocked = true;
-                        blockingFiles.Add(mainModulePath);
-                        reason = "Executable is on drive";
-                    }
-                }
-                catch
-                {
-                    // Likely Access Denied. Not a real error - many system processes
-                    // refuse module queries unless we're elevated.
-                    denied++;
-                }
+                    bool blocked = false;
+                    string reason = "";
+                    // HashSet avoids O(n^2) Contains() on processes with many DLLs loaded
+                    var blockingFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    string mainModulePath = "";
 
-                // (b) Loaded modules - catches any DLL loaded from the drive
-                try
-                {
-                    foreach (ProcessModule mod in p.Modules)
+                    // (a) Main module / .exe path. Frequently denied for protected processes.
+                    try
                     {
-                        var path = mod.FileName ?? "";
-                        if (path.StartsWith(drivePrefix, StringComparison.OrdinalIgnoreCase))
+                        mainModulePath = p.MainModule?.FileName ?? "";
+                        if (!string.IsNullOrEmpty(mainModulePath) &&
+                            mainModulePath.StartsWith(drivePrefix, StringComparison.OrdinalIgnoreCase))
                         {
                             blocked = true;
-                            if (!blockingFiles.Contains(path)) blockingFiles.Add(path);
-                            if (string.IsNullOrEmpty(reason)) reason = "Has module(s) loaded from drive";
+                            blockingFiles.Add(mainModulePath);
+                            reason = "Executable is on drive";
                         }
                     }
-                }
-                catch
-                {
-                    // Same deal - protected process, or 32/64-bit mismatch
-                    denied++;
-                }
-
-                if (blocked)
-                {
-                    matched++;
-                    results[p.Id] = new ProcessUsage
+                    catch
                     {
-                        Pid          = p.Id,
-                        ProcessName  = p.ProcessName,
-                        MainModule   = mainModulePath,
-                        Reason       = reason,
-                        BlockingFiles = blockingFiles
-                    };
-                    _log.Debug("DriveScanner", "ScanProcessModules", "MATCH",
-                        $"pid={p.Id} name={p.ProcessName} files={blockingFiles.Count}");
-                }
+                        // Likely Access Denied. Not a real error - many system processes
+                        // refuse module queries unless we're elevated.
+                        denied++;
+                    }
 
-                inspected++;
+                    // (b) Loaded modules - catches any DLL loaded from the drive
+                    try
+                    {
+                        foreach (ProcessModule mod in p.Modules)
+                        {
+                            var path = mod.FileName ?? "";
+                            if (path.StartsWith(drivePrefix, StringComparison.OrdinalIgnoreCase))
+                            {
+                                blocked = true;
+                                blockingFiles.Add(path);
+                                if (string.IsNullOrEmpty(reason)) reason = "Has module(s) loaded from drive";
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Same deal - protected process, or 32/64-bit mismatch
+                        denied++;
+                    }
+
+                    if (blocked)
+                    {
+                        matched++;
+                        results[p.Id] = new ProcessUsage
+                        {
+                            Pid          = p.Id,
+                            ProcessName  = p.ProcessName,
+                            MainModule   = mainModulePath,
+                            Reason       = reason,
+                            BlockingFiles = blockingFiles.ToList()
+                        };
+                        _log.Debug("DriveScanner", "ScanProcessModules", "MATCH",
+                            $"pid={p.Id} name={p.ProcessName} files={blockingFiles.Count}");
+                    }
+
+                    inspected++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _log.Debug("DriveScanner", "ScanProcessModules", "ERR_PROC",
+                        $"pid={p.Id} error={ex.Message}");
+                }
+                finally
+                {
+                    // Process is IDisposable - releases the underlying OS handle
+                    try { p.Dispose(); } catch { }
+                }
             }
-            catch (Exception ex)
+        }
+        finally
+        {
+            // If we bailed early via cancellation/exception, dispose the remaining
+            // Process objects so their kernel handles aren't leaked until GC.
+            for (int j = i + 1; j < processes.Length; j++)
             {
-                _log.Debug("DriveScanner", "ScanProcessModules", "ERR_PROC",
-                    $"pid={p.Id} error={ex.Message}");
-            }
-            finally
-            {
-                // Process is IDisposable - releases the underlying OS handle
-                try { p.Dispose(); } catch { }
+                try { processes[j].Dispose(); } catch { }
             }
         }
 
@@ -281,6 +300,10 @@ public class DriveScanner
         Dictionary<int, ProcessUsage> results,
         CancellationToken ct)
     {
+        // Cancellation may have arrived between strategies; bail before opening
+        // an RM session we'd just throw away.
+        ct.ThrowIfCancellationRequested();
+
         _log.Debug("DriveScanner", "RestartManager", "START", $"drive={driveLetter}");
 
         uint handle = 0;
@@ -312,9 +335,12 @@ public class DriveScanner
 
             rc = RmGetList(handle, out procInfoNeeded, ref procInfo, null, ref rebootReasons);
 
+            // ERROR_MORE_DATA is expected on the sizing call when there ARE blockers.
+            // rc == 0 with procInfoNeeded == 0 means "no blockers." Anything else is
+            // a real API error and shouldn't be silently labeled "EMPTY."
             if (rc != 0 && rc != ERROR_MORE_DATA)
             {
-                _log.Debug("DriveScanner", "RestartManager", "EMPTY", $"rc={rc}");
+                _log.Warn("DriveScanner", "RestartManager", "FAIL_GETLIST_SIZE", $"rc={rc}");
                 return;
             }
 
@@ -342,17 +368,28 @@ public class DriveScanner
 
                 if (results.TryGetValue(pid, out var existing))
                 {
-                    // Strategy 1 already found this - just enrich the reason
+                    // Strategy 1 already found this - just enrich the reason with the
+                    // RM-supplied descriptive app name.
                     if (!existing.Reason.Contains("Restart Manager"))
                         existing.Reason += $"; Restart Manager: {pi.strAppName}";
                 }
                 else
                 {
+                    // RM-only blocker. Resolve the short OS process name so the grid's
+                    // "Process" column matches the format used by Strategy 1; stash
+                    // RM's descriptive app name in the Reason column.
+                    string shortName = ResolveShortName(pid);
+                    string mainModule = ResolveMainModule(pid);
+                    string reason = string.IsNullOrEmpty(pi.strAppName)
+                        ? "Detected by Restart Manager"
+                        : $"Detected by Restart Manager ({pi.strAppName})";
+
                     results[pid] = new ProcessUsage
                     {
                         Pid         = pid,
-                        ProcessName = string.IsNullOrEmpty(pi.strAppName) ? "(unknown)" : pi.strAppName,
-                        Reason      = "Detected by Restart Manager"
+                        ProcessName = shortName,
+                        MainModule  = mainModule,
+                        Reason      = reason
                     };
                 }
 
@@ -360,7 +397,7 @@ public class DriveScanner
                     $"pid={pid} name={pi.strAppName}");
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.Error("DriveScanner", "RestartManager", "EXCEPTION", $"error={ex.Message}");
         }
@@ -370,6 +407,35 @@ public class DriveScanner
             {
                 try { RmEndSession(handle); } catch { /* nothing we can do */ }
             }
+        }
+    }
+
+    // Best-effort short-name lookup for a PID we got from Restart Manager. Returns
+    // "(unknown)" if the process has already exited or we don't have access.
+    private static string ResolveShortName(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return p.ProcessName;
+        }
+        catch
+        {
+            return "(unknown)";
+        }
+    }
+
+    // Best-effort main-module path lookup. Will return "" for protected processes.
+    private static string ResolveMainModule(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return p.MainModule?.FileName ?? "";
+        }
+        catch
+        {
+            return "";
         }
     }
 

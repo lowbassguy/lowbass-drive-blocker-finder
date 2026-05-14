@@ -9,6 +9,8 @@
 // =============================================================================
 
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -18,6 +20,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using LowbassDriveBlockerFinder.Models;
 
 namespace LowbassDriveBlockerFinder;
@@ -37,6 +40,16 @@ public partial class MainWindow : Window
     // Cap the log panel so it doesn't grow without bound during long sessions.
     private const int MaxLogLinesInUi = 2000;
 
+    // Lock-free producer queue: Logger can fire from any thread, we drain on UI thread.
+    private readonly ConcurrentQueue<string> _pendingLogLines = new();
+
+    // UI-thread-only window of lines currently shown. Capped at MaxLogLinesInUi.
+    private readonly Queue<string> _uiLines = new();
+
+    // Batches log flushes so a verbose scan doesn't post hundreds of Dispatcher
+    // jobs and force a TextBox layout per line.
+    private DispatcherTimer? _logFlushTimer;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -46,6 +59,15 @@ public partial class MainWindow : Window
 
         // Mirror every log line emitted by the Logger into our TextBox
         Logger.Instance.LogEmitted += OnLogEmitted;
+
+        // Drain the log queue ~10 times a second. Background priority so genuine
+        // UI work (clicks, scrolling) gets serviced first.
+        _logFlushTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(100)
+        };
+        _logFlushTimer.Tick += (_, _) => FlushLogLines();
+        _logFlushTimer.Start();
 
         // Run our cleanup on window close
         Closing += MainWindow_Closing;
@@ -60,22 +82,43 @@ public partial class MainWindow : Window
 
     private void OnLogEmitted(string line)
     {
-        // Logger fires this on whatever thread did the log call. The TextBox
-        // is UI-thread-only, so we marshal via the Dispatcher. BeginInvoke (not
-        // Invoke) avoids any chance of cross-thread deadlocks.
-        Dispatcher.BeginInvoke(() =>
+        // Producer side - any thread. Just enqueue; the UI timer drains and renders.
+        _pendingLogLines.Enqueue(line);
+    }
+
+    private void FlushLogLines()
+    {
+        if (_pendingLogLines.IsEmpty) return;
+
+        // Drain everything queued at this instant
+        var batch = new List<string>();
+        while (_pendingLogLines.TryDequeue(out var line))
+            batch.Add(line);
+
+        bool overflowed = false;
+        foreach (var line in batch)
         {
-            LogBox.AppendText(line + Environment.NewLine);
-
-            // Trim old lines if we're over the cap
-            if (LogBox.LineCount > MaxLogLinesInUi)
+            _uiLines.Enqueue(line);
+            while (_uiLines.Count > MaxLogLinesInUi)
             {
-                var lines = LogBox.Text.Split(Environment.NewLine);
-                LogBox.Text = string.Join(Environment.NewLine, lines.Skip(lines.Length - MaxLogLinesInUi));
+                _uiLines.Dequeue();
+                overflowed = true;
             }
+        }
 
-            LogBox.ScrollToEnd();
-        });
+        if (overflowed)
+        {
+            // Trim happened: rebuild the visible text from the in-memory window.
+            // This O(N) cost only pays out when we cross the cap, not per line.
+            LogBox.Text = string.Join(Environment.NewLine, _uiLines) + Environment.NewLine;
+        }
+        else
+        {
+            // Cheap append - layout invalidates once for the whole batch.
+            LogBox.AppendText(string.Join(Environment.NewLine, batch) + Environment.NewLine);
+        }
+
+        LogBox.ScrollToEnd();
     }
 
     // -------------------------------------------------------------------------
@@ -173,7 +216,7 @@ public partial class MainWindow : Window
     //  Eject
     // -------------------------------------------------------------------------
 
-    private void EjectButton_Click(object sender, RoutedEventArgs e)
+    private async void EjectButton_Click(object sender, RoutedEventArgs e)
     {
         var driveLetter = GetSelectedDriveLetter();
         if (string.IsNullOrEmpty(driveLetter)) return;
@@ -184,20 +227,72 @@ public partial class MainWindow : Window
             "Confirm eject", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (confirm != MessageBoxResult.Yes) return;
 
-        bool ok = _ejector.TryEject(driveLetter);
+        // Run the kernel ioctls on a background thread - the LOCK call can block
+        // for a noticeable moment on busy volumes, and we don't want the window
+        // to go "Not Responding."
+        SetActionsEnabled(false);
+        StatusText.Text = $"Ejecting {driveLetter}...";
 
-        if (ok)
+        EjectResult result;
+        try
         {
-            MessageBox.Show($"{driveLetter} ejected successfully ✅",
-                "Result", MessageBoxButton.OK, MessageBoxImage.Information);
-            RefreshDrives();
+            result = await Task.Run(() => _ejector.TryEject(driveLetter));
         }
-        else
+        finally
         {
-            MessageBox.Show(
-                "Could not eject. Most likely something is still holding the drive — " +
-                "click Scan to see what.",
-                "Could not eject", MessageBoxButton.OK, MessageBoxImage.Warning);
+            SetActionsEnabled(true);
+        }
+
+        switch (result)
+        {
+            case EjectResult.Ok:
+                StatusText.Text = $"✅ {driveLetter} ejected.";
+                MessageBox.Show($"{driveLetter} ejected successfully ✅",
+                    "Result", MessageBoxButton.OK, MessageBoxImage.Information);
+                RefreshDrives();
+                break;
+
+            case EjectResult.StillInUse:
+                StatusText.Text = $"⚠ {driveLetter} is still in use.";
+                MessageBox.Show(
+                    "Could not lock the volume — something is still holding it.\n\n" +
+                    "Click Scan to see which processes have it open.",
+                    "Still in use", MessageBoxButton.OK, MessageBoxImage.Warning);
+                break;
+
+            case EjectResult.NotEjectable:
+                StatusText.Text = $"ℹ {driveLetter} dismounted, but the device doesn't support physical eject.";
+                MessageBox.Show(
+                    $"{driveLetter} was dismounted successfully, but the device " +
+                    "doesn't support a physical eject. This is normal for fixed " +
+                    "disks, network shares, and optical drives.",
+                    "Dismounted (no eject)", MessageBoxButton.OK, MessageBoxImage.Information);
+                RefreshDrives();
+                break;
+
+            case EjectResult.OpenFailed:
+                StatusText.Text = $"❌ Could not open {driveLetter}.";
+                MessageBox.Show(
+                    $"Could not open {driveLetter} for eject. The drive letter may " +
+                    "be invalid or unavailable. Check the log for the Win32 error code.",
+                    "Open failed", MessageBoxButton.OK, MessageBoxImage.Error);
+                break;
+
+            case EjectResult.DismountFailed:
+                StatusText.Text = $"❌ Dismount failed for {driveLetter}.";
+                MessageBox.Show(
+                    "The volume was locked but dismount failed. Check the log for the " +
+                    "Win32 error code.",
+                    "Dismount failed", MessageBoxButton.OK, MessageBoxImage.Error);
+                break;
+
+            case EjectResult.Exception:
+            default:
+                StatusText.Text = "❌ Eject failed unexpectedly.";
+                MessageBox.Show(
+                    "Eject failed unexpectedly. See the log for details.",
+                    "Eject failed", MessageBoxButton.OK, MessageBoxImage.Error);
+                break;
         }
     }
 
@@ -241,8 +336,14 @@ public partial class MainWindow : Window
 
     private void ClearLog_Click(object sender, RoutedEventArgs e)
     {
-        LogBox.Clear();
+        // Record the action to the file *before* we nuke UI state. We then drop
+        // anything still in the queue (including the line we just emitted) so the
+        // panel ends genuinely empty instead of containing a single "cleared" line.
         Logger.Instance.Info("UI", "ClearLog", "DONE", "cleared in-UI log buffer (file unaffected)");
+
+        while (_pendingLogLines.TryDequeue(out _)) { }
+        _uiLines.Clear();
+        LogBox.Clear();
     }
 
     private void OpenLogFile_Click(object sender, RoutedEventArgs e)
@@ -296,11 +397,18 @@ public partial class MainWindow : Window
         // Cancel any in-flight scan so the Task can clean up promptly
         try { _cts?.Cancel(); } catch { }
 
-        // Unhook the log subscription so we don't try to write to a torn-down TextBox
-        Logger.Instance.LogEmitted -= OnLogEmitted;
-
+        // Emit the friendly goodbye BEFORE unsubscribing so it makes it into the
+        // visible log panel - otherwise the line only lands in the file sink.
         Logger.Instance.Success("UI", "Shutdown", "BYE",
             "👋 thanks for using lowbass' Drive Blocker Finder!");
+
+        // One last manual flush so the goodbye renders before the window tears down
+        FlushLogLines();
+
+        // Stop the timer and unhook the log subscription so we don't try to write
+        // to a torn-down TextBox during App.OnExit's final logging.
+        _logFlushTimer?.Stop();
+        Logger.Instance.LogEmitted -= OnLogEmitted;
         // App.OnExit will fire next and flush the log file
     }
 }

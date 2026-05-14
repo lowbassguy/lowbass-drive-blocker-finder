@@ -92,7 +92,6 @@
                 <Button DockPanel.Dock="Right" Content="Clear" Margin="0,0,8,0"
                         Padding="6,2" Click="ClearLog_Click"
                         HorizontalAlignment="Right" />
-                <TextBlock />
             </DockPanel>
             <TextBox Grid.Row="1" x:Name="LogBox"
                      IsReadOnly="True" VerticalScrollBarVisibility="Auto"

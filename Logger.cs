@@ -55,7 +55,10 @@ public sealed class Logger : IDisposable
             var dir = Path.Combine(Path.GetTempPath(), "LowbassDriveBlockerFinder");
             Directory.CreateDirectory(dir);
             LogFilePath = Path.Combine(dir, $"log-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
-            _fileWriter = new StreamWriter(LogFilePath, append: true) { AutoFlush = true };
+            // No AutoFlush - a verbose scan can emit hundreds of lines/second and
+            // flushing each one is a measurable I/O bottleneck. We flush explicitly
+            // for WARN/ERROR/SUCCESS (so crash-relevant lines hit disk) and on Dispose.
+            _fileWriter = new StreamWriter(LogFilePath, append: true);
         }
         catch
         {
@@ -77,20 +80,21 @@ public sealed class Logger : IDisposable
         => Write("INFO",    "ℹ️", component, action, outcome, details);
 
     public void Warn   (string component, string action, string outcome, string details = "")
-        => Write("WARN",    "⚠️", component, action, outcome, details);
+        => Write("WARN",    "⚠️", component, action, outcome, details, flushNow: true);
 
     public void Error  (string component, string action, string outcome, string details = "")
-        => Write("ERROR",   "❌", component, action, outcome, details);
+        => Write("ERROR",   "❌", component, action, outcome, details, flushNow: true);
 
     public void Success(string component, string action, string outcome, string details = "")
-        => Write("OK",      "✅", component, action, outcome, details);
+        => Write("OK",      "✅", component, action, outcome, details, flushNow: true);
 
     // -----------------------------------------------------------------------
     // The actual writer. Builds the line, writes to the file under lock, then
     // raises the UI event OUTSIDE the lock so the UI thread can't deadlock us.
     // -----------------------------------------------------------------------
     private void Write(string level, string emoji, string component, string action,
-                       string outcome, string details, bool debugOnly = false)
+                       string outcome, string details,
+                       bool debugOnly = false, bool flushNow = false)
     {
         // Suppress DEBUG lines entirely when verbose is off
         if (debugOnly && !Verbose) return;
@@ -109,7 +113,13 @@ public sealed class Logger : IDisposable
         lock (_lock)
         {
             if (_disposed) return;
-            try { _fileWriter?.WriteLine(line); }
+            try
+            {
+                _fileWriter?.WriteLine(line);
+                // Crash-relevant levels flush immediately so we don't lose the line
+                // if the process dies before the buffer is drained naturally.
+                if (flushNow) _fileWriter?.Flush();
+            }
             catch { /* never let logging crash the app */ }
         }
 

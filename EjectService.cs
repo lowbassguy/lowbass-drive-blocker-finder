@@ -19,6 +19,17 @@ using Microsoft.Win32.SafeHandles;
 
 namespace LowbassDriveBlockerFinder;
 
+/// <summary>Describes which step of the lock→dismount→eject sequence reached.</summary>
+public enum EjectResult
+{
+    Ok,
+    OpenFailed,
+    StillInUse,       // FSCTL_LOCK_VOLUME failed (something still has handles)
+    DismountFailed,
+    NotEjectable,     // Lock+dismount ok; eject ioctl failed (non-removable media)
+    Exception
+}
+
 public class EjectService
 {
     private readonly Logger _log = Logger.Instance;
@@ -50,10 +61,11 @@ public class EjectService
     private const uint IOCTL_STORAGE_EJECT_MEDIA = 0x002D4808;
 
     /// <summary>
-    /// Tries to lock+dismount+eject the given drive. Returns true on full success.
-    /// Logs every step. Caller should check the log/return value to decide UI feedback.
+    /// Tries to lock+dismount+eject the given drive. Returns an <see cref="EjectResult"/>
+    /// describing which step succeeded or where the failure happened, so callers can
+    /// show a precise message instead of guessing "in use" for every failure.
     /// </summary>
-    public bool TryEject(string driveLetter)
+    public EjectResult TryEject(string driveLetter)
     {
         _log.Info("EjectService", "TryEject", "START", $"drive={driveLetter}");
 
@@ -77,7 +89,7 @@ public class EjectService
                 int err = Marshal.GetLastWin32Error();
                 _log.Error("EjectService", "TryEject", "FAIL_OPEN",
                     $"win32err={err} - is the drive letter valid?");
-                return false;
+                return EjectResult.OpenFailed;
             }
 
             // Step 1: lock the volume. This is THE call that fails if anything
@@ -89,7 +101,7 @@ public class EjectService
                 int err = Marshal.GetLastWin32Error();
                 _log.Warn("EjectService", "TryEject", "FAIL_LOCK",
                     $"win32err={err} - drive is in use; run a Scan to see what's holding it");
-                return false;
+                return EjectResult.StillInUse;
             }
             _log.Debug("EjectService", "TryEject", "LOCKED", "exclusive access obtained");
 
@@ -99,7 +111,7 @@ public class EjectService
             {
                 _log.Warn("EjectService", "TryEject", "FAIL_DISMOUNT",
                     $"win32err={Marshal.GetLastWin32Error()}");
-                return false;
+                return EjectResult.DismountFailed;
             }
             _log.Debug("EjectService", "TryEject", "DISMOUNTED", "filesystem unmounted");
 
@@ -111,18 +123,18 @@ public class EjectService
                 // Note: fixed disks will fail here. That's expected. The dismount
                 // above is what actually freed any in-flight handles for those.
                 _log.Warn("EjectService", "TryEject", "FAIL_EJECT_MEDIA",
-                    $"win32err={err} - may be non-ejectable media; dismount still succeeded");
-                return false;
+                    $"win32err={err} - non-ejectable media; dismount still succeeded");
+                return EjectResult.NotEjectable;
             }
 
             _log.Success("EjectService", "TryEject", "EJECTED",
                 $"drive={driveLetter} safely removed 🎉");
-            return true;
+            return EjectResult.Ok;
         }
         catch (Exception ex)
         {
             _log.Error("EjectService", "TryEject", "EXCEPTION", $"error={ex.Message}");
-            return false;
+            return EjectResult.Exception;
         }
         finally
         {
