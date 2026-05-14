@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Title:   Drive Blocker Finder - Application Manifest
+    Author:  Joshua "lowbass" Sommerfeldt
+    Date:    2026-05-14
+    Purpose: Declares UAC level. We use 'asInvoker' so the app doesn't pop a UAC
+             prompt on every launch. If users want deeper visibility into protected
+             processes, they can right-click -> "Run as administrator" manually.
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="DriveBlockerFinder.app" />
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v2">
+        <!--
+            level="asInvoker"  -> No UAC prompt. Runs at caller's privilege.
+            level="requireAdministrator" -> Forces UAC on every launch.
+            level="highestAvailable" -> UAC if user can elevate, otherwise asInvoker.
+        -->
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <!-- Tell Windows we are DPI-aware, so the UI doesn't look blurry on 4K -->
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/PM</dpiAware>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>

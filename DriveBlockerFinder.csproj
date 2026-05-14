@@ -1,0 +1,29 @@
+<!--
+    Title:   Drive Blocker Finder - Project File
+    Author:  Joshua "lowbass" Sommerfeldt
+    Date:    2026-05-14
+    Purpose: MSBuild project definition. Targets net8.0-windows so we can use WPF
+             and rely on modern C# 12 language features. WinExe = no console window
+             popping up alongside the GUI.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- WinExe instead of Exe so we don't get a stray console window -->
+    <OutputType>WinExe</OutputType>
+    <!-- net8.0-windows is required to enable WPF; net8.0 (plain) won't -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>DriveBlockerFinder</RootNamespace>
+    <AssemblyName>DriveBlockerFinder</AssemblyName>
+    <!-- The manifest controls UAC behavior; we ship as asInvoker -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Generates a nice Windows version stamp on the .exe -->
+    <Version>1.0.0</Version>
+    <Company>lowbass</Company>
+    <Product>Drive Blocker Finder</Product>
+  </PropertyGroup>
+
+</Project>
