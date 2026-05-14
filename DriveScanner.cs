@@ -39,6 +39,10 @@ public class DriveScanner
     // Logger.Instance reads cleanly inline; we cache it here purely for brevity.
     private readonly Logger _log = Logger.Instance;
 
+    // Strategy 3 - file handle enumeration. Holds a worker thread internally
+    // so we construct it once and reuse across scans.
+    private readonly HandleScanner _handleScanner = new();
+
     // =========================================================================
     //  Restart Manager P/Invoke surface (rstrtmgr.dll)
     //
@@ -163,6 +167,14 @@ public class DriveScanner
         // Strategy 2: ask Restart Manager. Best-effort - works well for some
         // resource types and not others when given a volume root.
         ScanWithRestartManager(driveLetter, results, ct);
+
+        ct.ThrowIfCancellationRequested();
+
+        // Strategy 3: enumerate every open file HANDLE in the system and find
+        // the ones pointing at the target drive. This is what catches "Notepad
+        // has a .txt open" / "Photos viewer has a .jpg open" - the cases that
+        // strategies 1 and 2 can't see.
+        ScanFileHandles(driveLetter, results, ct);
 
         _log.Success("DriveScanner", "FindBlockingProcesses", "DONE",
             $"drive={driveLetter} blockers={results.Count}");
@@ -406,6 +418,65 @@ public class DriveScanner
             if (handle != 0)
             {
                 try { RmEndSession(handle); } catch { /* nothing we can do */ }
+            }
+        }
+    }
+
+    // =========================================================================
+    //  Strategy 3: file handle enumeration
+    // =========================================================================
+
+    private void ScanFileHandles(
+        string driveLetter,
+        Dictionary<int, ProcessUsage> results,
+        CancellationToken ct)
+    {
+        Dictionary<int, List<string>> findings;
+        try
+        {
+            findings = _handleScanner.FindHandlesOnDrive(driveLetter, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("DriveScanner", "FileHandles", "EXCEPTION", $"error={ex.Message}");
+            return;
+        }
+
+        foreach (var kv in findings)
+        {
+            int pid = kv.Key;
+            var files = kv.Value;
+
+            if (results.TryGetValue(pid, out var existing))
+            {
+                // Process was already found by an earlier strategy - enrich.
+                if (!existing.Reason.Contains("file handle"))
+                {
+                    existing.Reason = string.IsNullOrEmpty(existing.Reason)
+                        ? "Has file handle on drive"
+                        : existing.Reason + "; Has file handle on drive";
+                }
+                foreach (var f in files)
+                {
+                    if (!existing.BlockingFiles.Contains(f, StringComparer.OrdinalIgnoreCase))
+                        existing.BlockingFiles.Add(f);
+                }
+            }
+            else
+            {
+                // New find - resolve a friendly name + main module path.
+                results[pid] = new ProcessUsage
+                {
+                    Pid           = pid,
+                    ProcessName   = ResolveShortName(pid),
+                    MainModule    = ResolveMainModule(pid),
+                    Reason        = "Has file handle on drive",
+                    BlockingFiles = files
+                };
             }
         }
     }
